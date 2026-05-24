@@ -22,6 +22,8 @@ interface AutomationRuleDao {
     suspend fun setEnabled(id: Long, enabled: Boolean)
     @Query("SELECT COUNT(*) FROM automation_rules")
     suspend fun count(): Int
+    @Query("SELECT * FROM automation_rules WHERE enabled = 1 AND trigger_type = 'time' AND next_run IS NOT NULL AND next_run <= :now ORDER BY next_run ASC")
+    suspend fun pendingTimeBasedRules(now: Long): List<AutomationRuleEntity>
 }
 
 @Dao

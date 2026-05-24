@@ -14,6 +14,7 @@ import com.offlinebot.data.database.entities.AutomationLogEntity
 import com.offlinebot.data.database.entities.AutomationRuleEntity
 import com.offlinebot.ai.automation.DailySummaryWorker
 import com.offlinebot.ai.automation.ResurfaceWorker
+import com.offlinebot.ai.automation.RuleSchedulerWorker
 import com.offlinebot.utils.ActivityLogger
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -39,7 +40,12 @@ data class AutomationState(
     val editingRuleSchedule: String = "daily_21",
     val editingRuleCondition: String = "",
     val editingRuleAction: String = "",
-    val snackbarMessage: String? = null
+    val editingRuleHour: Int = 21,
+    val editingRuleMinute: Int = 0,
+    val showTimePicker: Boolean = false,
+    val snackbarMessage: String? = null,
+    val nextSchedulerCheckMs: Long = 0L,
+    val schedulerIntervalMin: Long = RuleSchedulerWorker.intervalMinutes
 )
 
 @HiltViewModel
@@ -66,10 +72,13 @@ class AutomationViewModel @Inject constructor(
                 refreshBattery()
                 try {
                     val jobs = workManager.getWorkInfosByTag("automation").get()
+                    val nextCheck = jobs.filter { it.state == WorkInfo.State.ENQUEUED }
+                        .minOfOrNull { it.nextScheduleTimeMillis } ?: 0L
                     _state.update {
                         it.copy(
                             pendingJobs = jobs.count { w -> w.state == WorkInfo.State.ENQUEUED },
-                            activeJobs = jobs.count { w -> w.state == WorkInfo.State.RUNNING }
+                            activeJobs = jobs.count { w -> w.state == WorkInfo.State.RUNNING },
+                            nextSchedulerCheckMs = nextCheck
                         )
                     }
                 } catch (_: Exception) {}
@@ -172,6 +181,15 @@ class AutomationViewModel @Inject constructor(
         if (dailyHour != null) {
             return computeNextTime(dailyHour, 0)
         }
+        // "Every day at 9 PM" or "Every day at 8 AM"
+        val everyDayAt = Regex("""every\s+day\s+at\s+(\d+)\s*(am|pm)""", RegexOption.IGNORE_CASE).find(schedule)
+        if (everyDayAt != null) {
+            var hour = everyDayAt.groupValues[1].toIntOrNull() ?: return System.currentTimeMillis() + 3600_000
+            val ampm = everyDayAt.groupValues[2].lowercase()
+            if (ampm == "pm" && hour < 12) hour += 12
+            if (ampm == "am" && hour == 12) hour = 0
+            return computeNextTime(hour, 0)
+        }
         val weeklyDay = Regex("weekly_(sun|mon|tue|wed|thu|fri|sat)", RegexOption.IGNORE_CASE)
             .find(schedule)?.groupValues?.get(1)?.lowercase()
         if (weeklyDay != null) {
@@ -181,6 +199,8 @@ class AutomationViewModel @Inject constructor(
             )
             return computeNextDayOfWeek(dayMap[weeklyDay] ?: 1)
         }
+        // "Every Sunday"
+        if (schedule.contains("Sunday", ignoreCase = true)) return computeNextDayOfWeek(1)
         return System.currentTimeMillis() + 3600_000
     }
 
@@ -197,18 +217,29 @@ class AutomationViewModel @Inject constructor(
     }
 
     // Rule CRUD
-    fun startNewRule() { _state.update { it.copy(editingRule = true, editingRuleName = "", editingRuleTrigger = "time", editingRuleSchedule = "daily_21", editingRuleCondition = "", editingRuleAction = "") } }
+    fun startNewRule() { _state.update { it.copy(editingRule = true, editingRuleName = "", editingRuleTrigger = "time", editingRuleSchedule = "daily_21", editingRuleCondition = "", editingRuleAction = "", editingRuleHour = 21, editingRuleMinute = 0) } }
     fun cancelEdit() { _state.update { it.copy(editingRule = false) } }
     fun updateEditName(n: String) { _state.update { it.copy(editingRuleName = n) } }
     fun updateEditTrigger(t: String) { _state.update { it.copy(editingRuleTrigger = t) } }
     fun updateEditSchedule(s: String) { _state.update { it.copy(editingRuleSchedule = s) } }
     fun updateEditCondition(c: String) { _state.update { it.copy(editingRuleCondition = c) } }
     fun updateEditAction(a: String) { _state.update { it.copy(editingRuleAction = a) } }
+    fun updateEditHour(h: Int) { _state.update { it.copy(editingRuleHour = h) } }
+    fun updateEditMinute(m: Int) { _state.update { it.copy(editingRuleMinute = m) } }
+    fun toggleTimePicker() { _state.update { it.copy(showTimePicker = !it.showTimePicker) } }
 
     fun saveRule() {
         viewModelScope.launch {
             val s = _state.value
-            val nextRun = if (s.editingRuleTrigger == "time" && s.editingRuleSchedule.isNotBlank()) {
+            // Build schedule from time picker for time-based rules
+            val scheduleStr = if (s.editingRuleTrigger == "time") {
+                "daily_${s.editingRuleHour}"
+            } else {
+                s.editingRuleSchedule
+            }
+            val nextRun = if (s.editingRuleTrigger == "time") {
+                computeNextTime(s.editingRuleHour, s.editingRuleMinute)
+            } else if (s.editingRuleSchedule.isNotBlank()) {
                 parseScheduleTime(s.editingRuleSchedule)
             } else {
                 System.currentTimeMillis() + 3600_000
@@ -217,7 +248,7 @@ class AutomationViewModel @Inject constructor(
                 name = s.editingRuleName.ifBlank { "New Rule" },
                 enabled = true,
                 triggerType = s.editingRuleTrigger,
-                schedule = s.editingRuleSchedule.ifBlank { null },
+                schedule = scheduleStr.ifBlank { null },
                 conditionJson = s.editingRuleCondition.ifBlank { null },
                 actionJson = s.editingRuleAction.ifBlank { null },
                 nextRun = nextRun
@@ -274,16 +305,27 @@ class AutomationViewModel @Inject constructor(
 
     private fun sendNotification(title: String, body: String) {
         try {
-            val channelId = "kbot_tools"
-            val notification = android.app.Notification.Builder(context, channelId)
+            val channelId = "kbot_automation_v2"
+            val manager = context.getSystemService(android.app.NotificationManager::class.java)
+            val channel = android.app.NotificationChannel(channelId, "KBot Automation", android.app.NotificationManager.IMPORTANCE_HIGH).apply {
+                enableVibration(true)
+            }
+            manager.createNotificationChannel(channel)
+            val tapIntent = android.content.Intent(context, com.offlinebot.MainActivity::class.java).apply {
+                flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            val pending = android.app.PendingIntent.getActivity(context, 0, tapIntent,
+                android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT)
+            val notification = androidx.core.app.NotificationCompat.Builder(context, channelId)
                 .setContentTitle(title)
                 .setContentText(body.take(120))
-                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setSmallIcon(com.offlinebot.R.drawable.ic_launcher_foreground)
+                .setContentIntent(pending)
                 .setAutoCancel(true)
-                .setPriority(android.app.Notification.PRIORITY_HIGH)
+                .setPriority(androidx.core.app.NotificationCompat.PRIORITY_HIGH)
+                .setCategory(androidx.core.app.NotificationCompat.CATEGORY_STATUS)
                 .build()
-            val manager = context.getSystemService(android.app.NotificationManager::class.java)
-            manager.notify(System.currentTimeMillis().toInt(), notification)
+            manager.notify(title.hashCode(), notification)
         } catch (_: Exception) {}
     }
 
@@ -358,6 +400,13 @@ class AutomationViewModel @Inject constructor(
 
     fun clearSnackbar() {
         _state.update { it.copy(snackbarMessage = null) }
+    }
+
+    fun setSchedulerInterval(minutes: Long) {
+        RuleSchedulerWorker.intervalMinutes = minutes.coerceIn(1, 60)
+        RuleSchedulerWorker.schedule(workManager)
+        _state.update { it.copy(schedulerIntervalMin = RuleSchedulerWorker.intervalMinutes) }
+        activityLogger.log("Automation", "Scheduler interval set to ${RuleSchedulerWorker.intervalMinutes}min")
     }
 
     fun enqueueDailyWorkers() {

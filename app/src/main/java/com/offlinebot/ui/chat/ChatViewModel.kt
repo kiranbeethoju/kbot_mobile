@@ -1,5 +1,7 @@
 package com.offlinebot.ui.chat
 
+import android.content.Context
+import android.provider.ContactsContract
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -19,6 +21,7 @@ import com.offlinebot.data.database.dao.TranscriptDao
 import com.offlinebot.data.database.entities.ChatMessageEntity
 import com.offlinebot.utils.cosineSimilarity
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -84,6 +87,7 @@ data class ChatMessage(
 
 @HiltViewModel
 class ChatViewModel @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val embeddingEngine: EmbeddingEngine,
     private val embeddingDao: EmbeddingDao,
     val transcriptDao: TranscriptDao,
@@ -214,7 +218,7 @@ class ChatViewModel @Inject constructor(
         generationJob = viewModelScope.launch {
             val t0 = System.currentTimeMillis()
             try {
-                // Search memories in parallel with other prep
+                // Search memories + contacts in parallel
                 val contextDeferred = async(Dispatchers.IO) {
                     val t1 = System.currentTimeMillis()
                     val result = try {
@@ -227,10 +231,28 @@ class ChatViewModel @Inject constructor(
                     result
                 }
 
+                val contactsDeferred = async(Dispatchers.IO) {
+                    try {
+                        searchContactsForQuery(query)
+                    } catch (e: Exception) {
+                        Log.w("ChatViewModel", "Contact search failed", e)
+                        ""
+                    }
+                }
+
                 // While search runs, update UI
                 _state.update { it.copy(loadingText = "Searching memories...") }
 
-                val context = contextDeferred.await()
+                val memoryContext = contextDeferred.await()
+                val contactsContext = contactsDeferred.await()
+
+                val context = buildString {
+                    if (memoryContext.isNotEmpty()) append(memoryContext)
+                    if (contactsContext.isNotEmpty()) {
+                        if (isNotEmpty()) append("\n\n")
+                        append(contactsContext)
+                    }
+                }
                 _state.update { it.copy(lastContext = context, lastContextLen = context.length) }
 
                 val response: String
@@ -332,6 +354,105 @@ class ChatViewModel @Inject constructor(
                 }
             }
             .joinToString("\n\n")
+    }
+
+    /** Search contacts for names mentioned in the query — extracts name after trigger words like "call"/"text" */
+    private fun searchContactsForQuery(query: String): String {
+        val queryLower = query.lowercase()
+        val contactTriggers = listOf("call", "text", "message", "contact", "dial", "phone", "sms", "ring")
+        val isContactQuery = contactTriggers.any { queryLower.contains(it) }
+
+        // Extract name candidates: words after a contact trigger (e.g. "call John Smith" → ["John", "Smith"])
+        val words = query.split("\\s+".toRegex()).filter { it.length > 1 }
+        val nameCandidates = mutableListOf<String>()
+
+        for (i in words.indices) {
+            if (contactTriggers.any { words[i].equals(it, ignoreCase = true) }) {
+                for (j in (i + 1) until words.size) {
+                    val word = words[j]
+                    if (word.lowercase() in listOf("about", "for", "to", "the", "a", "at", "on", "in", "and", "or", "with", "from", "please", "now", "later", "today", "tomorrow")) break
+                    nameCandidates.add(word.replace(Regex("[^a-zA-Z]"), ""))
+                }
+            }
+        }
+
+        // Fallback: proper-looking capitalized words not in common-word list
+        val commonWords = setOf("I", "I'm", "I'll", "I've", "The", "A", "This", "That", "What", "Who", "How", "When", "Where", "Why", "Can", "Could", "Would", "Will", "Is", "Are", "Was", "Were", "Do", "Does", "Did", "Show", "Tell", "Find", "Get", "Search", "Look", "Open", "Please", "Hey", "Hi", "Hello", "OK", "Okay", "Yes", "No", "Maybe", "Need", "Want", "Going", "Just", "Like", "Know", "Think", "Really", "Still")
+        if (nameCandidates.isEmpty()) {
+            words.filter { word ->
+                word.firstOrNull()?.isUpperCase() == true && word.length > 1 && word !in commonWords
+            }.forEach { nameCandidates.add(it) }
+        }
+
+        // If it's a contact query but no name found, try extracting any capitalized word
+        if (isContactQuery && nameCandidates.isEmpty()) {
+            words.filter { it.length > 2 && it !in commonWords }.take(2).forEach { nameCandidates.add(it) }
+        }
+
+        if (!isContactQuery && nameCandidates.isEmpty()) return ""
+
+        val contacts = mutableListOf<Pair<String, String>>()
+        try {
+            context.contentResolver.query(
+                ContactsContract.Contacts.CONTENT_URI,
+                null, null, null, "display_name ASC LIMIT 50"
+            )?.use { cursor ->
+                val nameIdx = cursor.getColumnIndex(ContactsContract.Contacts.DISPLAY_NAME)
+                val idIdx = cursor.getColumnIndex(ContactsContract.Contacts._ID)
+                val hasPhoneIdx = cursor.getColumnIndex(ContactsContract.Contacts.HAS_PHONE_NUMBER)
+                while (cursor.moveToNext()) {
+                    val name = cursor.getString(nameIdx) ?: continue
+                    if (cursor.getInt(hasPhoneIdx) > 0) {
+                        val contactId = cursor.getString(idIdx)
+                        context.contentResolver.query(
+                            ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                            null,
+                            "${ContactsContract.CommonDataKinds.Phone.CONTACT_ID} = ?",
+                            arrayOf(contactId), null
+                        )?.use { phoneCursor ->
+                            val numIdx = phoneCursor.getColumnIndex(
+                                ContactsContract.CommonDataKinds.Phone.NUMBER)
+                            while (phoneCursor.moveToNext()) {
+                                contacts.add(name to phoneCursor.getString(numIdx))
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (_: Exception) {
+            return ""
+        }
+
+        if (contacts.isEmpty()) return ""
+
+        // Filter by name candidates — match whole name parts, not substrings
+        val filtered = if (nameCandidates.isNotEmpty()) {
+            contacts.filter { (name, _) ->
+                val nameParts = name.split(" ").map { it.lowercase() }
+                nameCandidates.any { cand ->
+                    nameParts.any { part -> part == cand.lowercase() || part.startsWith(cand.lowercase()) }
+                }
+            }
+        } else if (isContactQuery) {
+            emptyList() // Don't dump all contacts — let the LLM use get_contacts tool instead
+        } else {
+            emptyList()
+        }
+
+        if (filtered.isEmpty()) {
+            if (isContactQuery) {
+                return "--- Contact Search ---\nNo contact matched \"${nameCandidates.joinToString(" ")}\". Use get_contacts tool to browse all contacts.\n"
+            }
+            return ""
+        }
+
+        return buildString {
+            append("--- Matching Contacts ---\n")
+            filtered.take(10).forEach { (name, number) ->
+                append("$name: $number\n")
+            }
+            append("Use call_contact or send_message tool with the exact name and number above.\n")
+        }
     }
 
     private suspend fun generateWithLlm(query: String, context: String): String = withContext(Dispatchers.IO) {

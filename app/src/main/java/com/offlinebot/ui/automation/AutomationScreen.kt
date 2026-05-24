@@ -70,21 +70,148 @@ fun AutomationScreen(
         // Rule editor
         if (state.editingRule) {
             Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
-                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("New Rule", fontWeight = FontWeight.Bold)
-                    OutlinedTextField(state.editingRuleName, viewModel::updateEditName, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Create Automation Rule", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
+
+                    // 1. Name
+                    OutlinedTextField(
+                        state.editingRuleName, viewModel::updateEditName,
+                        label = { Text("Rule Name") },
+                        placeholder = { Text("e.g. Morning Summary") },
+                        singleLine = true, modifier = Modifier.fillMaxWidth()
+                    )
+
+                    // 2. Trigger Type
+                    Text("When should this rule run?", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(state.editingRuleTrigger == "time", { viewModel.updateEditTrigger("time") }, label = { Text("Time") })
-                        FilterChip(state.editingRuleTrigger == "event", { viewModel.updateEditTrigger("event") }, label = { Text("Event") })
-                        FilterChip(state.editingRuleTrigger == "nlp", { viewModel.updateEditTrigger("nlp") }, label = { Text("NLP") })
+                        FilterChip(state.editingRuleTrigger == "time",
+                            { viewModel.updateEditTrigger("time") },
+                            label = { Text("🕐 Time") },
+                            leadingIcon = { Icon(Icons.Outlined.Schedule, null, Modifier.size(16.dp)) })
+                        FilterChip(state.editingRuleTrigger == "event",
+                            { viewModel.updateEditTrigger("event") },
+                            label = { Text("🔔 Event") },
+                            leadingIcon = { Icon(Icons.Outlined.Notifications, null, Modifier.size(16.dp)) })
+                        FilterChip(state.editingRuleTrigger == "nlp",
+                            { viewModel.updateEditTrigger("nlp") },
+                            label = { Text("🧠 NLP") },
+                            leadingIcon = { Icon(Icons.Outlined.Psychology, null, Modifier.size(16.dp)) })
                     }
+
+                    // 3. Time Picker (only for time-based rules)
                     if (state.editingRuleTrigger == "time") {
-                        OutlinedTextField(state.editingRuleSchedule, viewModel::updateEditSchedule, label = { Text("Schedule (daily_21, weekly_sun, etc)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                        Text("At what time?", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        OutlinedButton(
+                            onClick = { viewModel.toggleTimePicker() },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Outlined.Schedule, contentDescription = null, modifier = Modifier.size(20.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                "%02d:%02d".format(state.editingRuleHour, state.editingRuleMinute),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                        Text(
+                            "Rule will run daily at this time. Battery-safe: skips if <20% and not charging.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
-                    OutlinedTextField(state.editingRuleCondition, viewModel::updateEditCondition, label = { Text("Condition (e.g. contains 'meeting')") }, modifier = Modifier.fillMaxWidth())
-                    OutlinedTextField(state.editingRuleAction, viewModel::updateEditAction, label = { Text("Action (summary, resurface, reminder, trend)") }, modifier = Modifier.fillMaxWidth())
+
+                    // Time picker dialog
+                    if (state.showTimePicker) {
+                        AlertDialog(
+                            onDismissRequest = { viewModel.toggleTimePicker() },
+                            title = { Text("Select Time") },
+                            text = {
+                                Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+                                        // Hour picker
+                                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                            IconButton(onClick = { viewModel.updateEditHour((state.editingRuleHour + 1) % 24) }) {
+                                                Icon(Icons.Outlined.KeyboardArrowUp, "Up")
+                                            }
+                                            Text(
+                                                "%02d".format(state.editingRuleHour),
+                                                style = MaterialTheme.typography.headlineMedium,
+                                                fontFamily = FontFamily.Monospace
+                                            )
+                                            IconButton(onClick = { viewModel.updateEditHour((state.editingRuleHour - 1 + 24) % 24) }) {
+                                                Icon(Icons.Outlined.KeyboardArrowDown, "Down")
+                                            }
+                                        }
+                                        Text(":", style = MaterialTheme.typography.headlineMedium)
+                                        // Minute picker (5-min steps)
+                                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                            IconButton(onClick = { viewModel.updateEditMinute((state.editingRuleMinute + 5) % 60) }) {
+                                                Icon(Icons.Outlined.KeyboardArrowUp, "Up")
+                                            }
+                                            Text(
+                                                "%02d".format(state.editingRuleMinute),
+                                                style = MaterialTheme.typography.headlineMedium,
+                                                fontFamily = FontFamily.Monospace
+                                            )
+                                            IconButton(onClick = { viewModel.updateEditMinute((state.editingRuleMinute - 5 + 60) % 60) }) {
+                                                Icon(Icons.Outlined.KeyboardArrowDown, "Down")
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                            confirmButton = {
+                                TextButton(onClick = { viewModel.toggleTimePicker() }) { Text("Done") }
+                            }
+                        )
+                    }
+
+                    // 4. Condition (for event/NLP triggers)
+                    if (state.editingRuleTrigger != "time") {
+                        OutlinedTextField(
+                            state.editingRuleCondition, viewModel::updateEditCondition,
+                            label = { Text("Condition") },
+                            placeholder = { Text("e.g. keyword 'meeting' or 5 mentions") },
+                            modifier = Modifier.fillMaxWidth(),
+                            supportingText = { Text("What triggers this rule? A keyword, a count, or a pattern in your memories.") }
+                        )
+                    }
+
+                    // 5. Action
+                    Text("What should it do?", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                        listOf("summary" to "Summary", "resurface" to "Resurface", "reminder" to "Remind", "cleanup" to "Clean").forEach { (value, label) ->
+                            FilterChip(
+                                selected = state.editingRuleAction.contains(value),
+                                onClick = { viewModel.updateEditAction(value) },
+                                label = { Text(label, fontSize = 12.sp) },
+                                modifier = Modifier.height(30.dp)
+                            )
+                        }
+                    }
+                    OutlinedTextField(
+                        state.editingRuleAction, viewModel::updateEditAction,
+                        label = { Text("Action") },
+                        placeholder = { Text("summary, resurface, reminder, trend, cleanup, tag, reflection") },
+                        modifier = Modifier.fillMaxWidth(),
+                        supportingText = {
+                            Text(
+                                when {
+                                    state.editingRuleAction.contains("summary") -> "Counts today's memories and gives you a summary."
+                                    state.editingRuleAction.contains("resurface") -> "Finds forgotten memories from weeks ago."
+                                    state.editingRuleAction.contains("reminder") -> "Scans for reminder keywords like 'remind', 'todo', 'don't forget'."
+                                    state.editingRuleAction.contains("cleanup") -> "Counts unprocessed recordings and checks storage."
+                                    state.editingRuleAction.contains("tag") -> "Labels memories matching your keywords."
+                                    state.editingRuleAction.contains("trend") -> "Analyzes topic patterns across recent memories."
+                                    state.editingRuleAction.contains("reflection") -> "Reflects on the past day's memories."
+                                    else -> "Choose an action above or type a custom one."
+                                }
+                            )
+                        }
+                    )
+
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(viewModel::saveRule) { Text("Save") }
+                        Button(viewModel::saveRule) { Text("Save Rule") }
                         OutlinedButton(viewModel::cancelEdit) { Text("Cancel") }
                     }
                 }
@@ -95,6 +222,53 @@ fun AutomationScreen(
                 Text(" Add Rule")
             }
         }
+
+        // Scheduler heartbeat
+        Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), shape = RoundedCornerShape(12.dp)) {
+            Column(Modifier.padding(12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    val blink = (System.currentTimeMillis() / 1000) % 2 == 0L
+                    Icon(
+                        Icons.Outlined.Circle,
+                        contentDescription = null,
+                        modifier = Modifier.size(10.dp),
+                        tint = if (state.pendingJobs > 0 || state.activeJobs > 0) Color(0xFF43A047)
+                               else if (blink) Color(0xFF2196F3)
+                               else Color(0xFF666666)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            if (state.pendingJobs > 0) "Scheduler Active — ${state.pendingJobs} jobs pending"
+                            else if (state.activeJobs > 0) "Scheduler Running — ${state.activeJobs} active"
+                            else "Scheduler Idle — listening for jobs",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Text(
+                            "Polling every ${state.schedulerIntervalMin}min",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+                // Interval picker
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf(1L to "1m", 5L to "5m", 15L to "15m", 30L to "30m", 60L to "1h").forEach { (mins, label) ->
+                        FilterChip(
+                            selected = state.schedulerIntervalMin == mins,
+                            onClick = { viewModel.setSchedulerInterval(mins) },
+                            label = { Text(label, fontSize = 11.sp) },
+                            modifier = Modifier.height(28.dp)
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(4.dp))
 
         // Rules list
         Text("Scheduled Intelligence", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)

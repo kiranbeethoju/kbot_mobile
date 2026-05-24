@@ -7,6 +7,7 @@ import androidx.work.WorkManager
 import com.offlinebot.ai.ModelAssetInstaller
 import com.offlinebot.ai.automation.DailySummaryWorker
 import com.offlinebot.ai.automation.ResurfaceWorker
+import com.offlinebot.ai.automation.RuleSchedulerWorker
 import com.offlinebot.ai.llm.LlamaCppEngine
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
@@ -33,6 +34,7 @@ class OfflineBotApp : Application(), Configuration.Provider {
                 val wm = WorkManager.getInstance(this@OfflineBotApp)
                 DailySummaryWorker.schedule(wm)
                 ResurfaceWorker.schedule(wm)
+                RuleSchedulerWorker.schedule(wm)
             } catch (_: Exception) {}
         }
     }
