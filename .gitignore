@@ -1,0 +1,17 @@
+.gradle/
+.idea/
+.DS_Store
+build/
+local.properties
+*.iml
+
+app/build/
+app/.cxx/
+
+# Local AI models are intentionally excluded.
+*.bin
+*.gguf
+*.onnx
+*.safetensors
+models/**
+!models/README.md

@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<style>
+* { margin:0; padding:0; }
+body { background:#0D1117; overflow:hidden; font-family:monospace; }
+canvas { display:block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+function resize() {
+  canvas.width = window.innerWidth * window.devicePixelRatio;
+  canvas.height = window.innerHeight * window.devicePixelRatio;
+  canvas.style.width = window.innerWidth + 'px';
+  canvas.style.height = window.innerHeight + 'px';
+  ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+}
+resize();
+window.addEventListener('resize', resize);
+
+// Get memory data from Android
+let nodes = [];
+let edges = [];
+
+function setData(data) {
+  try {
+    const parsed = JSON.parse(data);
+    nodes = parsed.nodes || [];
+    edges = parsed.edges || [];
+  } catch(e) {
+    nodes = [];
+    edges = [];
+  }
+}
+
+// Force simulation
+const centerX = () => window.innerWidth / 2;
+const centerY = () => window.innerHeight / 2;
+let simNodes = [];
+
+function initSim() {
+  simNodes = nodes.map((n, i) => ({
+    id: n.id,
+    label: n.label || 'Memory ' + i,
+    type: n.type || 'note',
+    x: centerX() + (Math.random() - 0.5) * 200,
+    y: centerY() + (Math.random() - 0.5) * 200,
+    vx: 0, vy: 0
+  }));
+}
+
+let draggedNode = null;
+let dragX = 0, dragY = 0;
+
+canvas.addEventListener('pointerdown', e => {
+  const mx = e.clientX, my = e.clientY;
+  for (const n of simNodes) {
+    const dx = n.x - mx, dy = n.y - my;
+    if (dx*dx + dy*dy < 900) {
+      draggedNode = n;
+      dragX = mx - n.x;
+      dragY = my - n.y;
+      break;
+    }
+  }
+});
+
+canvas.addEventListener('pointermove', e => {
+  if (draggedNode) {
+    draggedNode.x = e.clientX - dragX;
+    draggedNode.y = e.clientY - dragY;
+  }
+});
+
+canvas.addEventListener('pointerup', () => { draggedNode = null; });
+canvas.addEventListener('pointerleave', () => { draggedNode = null; });
+
+function simulate() {
+  const cx = centerX(), cy = centerY();
+  const repulsion = 8000;
+  const attraction = 0.005;
+  const damping = 0.85;
+  const centerForce = 0.002;
+
+  for (const n of simNodes) {
+    if (n === draggedNode) continue;
+
+    // Center gravity
+    n.vx += (cx - n.x) * centerForce;
+    n.vy += (cy - n.y) * centerForce;
+
+    // Repulsion between all nodes
+    for (const m of simNodes) {
+      if (n === m) continue;
+      let dx = n.x - m.x, dy = n.y - m.y;
+      let dist = Math.sqrt(dx*dx + dy*dy) || 1;
+      if (dist < 200) {
+        let force = repulsion / (dist * dist);
+        n.vx += (dx / dist) * force;
+        n.vy += (dy / dist) * force;
+      }
+    }
+  }
+
+  // Edge attraction
+  for (const e of edges) {
+    const s = simNodes.find(n => n.id === e.source);
+    const t = simNodes.find(n => n.id === e.target);
+    if (s && t) {
+      const dx = t.x - s.x, dy = t.y - s.y;
+      const dist = Math.sqrt(dx*dx + dy*dy) || 1;
+      if (dist > 80) {
+        const fx = dx * attraction;
+        const fy = dy * attraction;
+        if (s !== draggedNode) { s.vx += fx; s.vy += fy; }
+        if (t !== draggedNode) { t.vx -= fx; t.vy -= fy; }
+      }
+    }
+  }
+
+  // Apply velocity
+  for (const n of simNodes) {
+    if (n === draggedNode) continue;
+    n.vx *= damping;
+    n.vy *= damping;
+    n.x += n.vx;
+    n.y += n.vy;
+    // Clamp
+    n.x = Math.max(40, Math.min(window.innerWidth - 40, n.x));
+    n.y = Math.max(40, Math.min(window.innerHeight - 40, n.y));
+  }
+}
+
+const typeColors = {
+  audio: '#FF6B6B',
+  text: '#4ECDC4',
+  photo: '#FFE66D',
+  note: '#A78BFA'
+};
+
+function draw() {
+  ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+
+  // Draw edges
+  ctx.strokeStyle = 'rgba(75,85,99,0.4)';
+  ctx.lineWidth = 1;
+  for (const e of edges) {
+    const s = simNodes.find(n => n.id === e.source);
+    const t = simNodes.find(n => n.id === e.target);
+    if (s && t) {
+      ctx.beginPath();
+      ctx.moveTo(s.x, s.y);
+      ctx.lineTo(t.x, t.y);
+      ctx.stroke();
+    }
+  }
+
+  // Draw nodes
+  for (const n of simNodes) {
+    const color = typeColors[n.type] || '#6B7280';
+    const r = 20;
+
+    // Glow
+    const grad = ctx.createRadialGradient(n.x, n.y, r*0.5, n.x, n.y, r*2.5);
+    grad.addColorStop(0, color + '40');
+    grad.addColorStop(1, 'transparent');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(n.x, n.y, r*2.5, 0, Math.PI*2);
+    ctx.fill();
+
+    // Node body
+    ctx.fillStyle = color + 'E0';
+    ctx.beginPath();
+    ctx.arc(n.x, n.y, r, 0, Math.PI*2);
+    ctx.fill();
+
+    // Border
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Inner dot
+    ctx.fillStyle = '#FFFFFF';
+    ctx.beginPath();
+    ctx.arc(n.x, n.y, 5, 0, Math.PI*2);
+    ctx.fill();
+
+    // Label
+    ctx.fillStyle = '#E5E7EB';
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'center';
+    const label = n.label.length > 20 ? n.label.substring(0, 18) + '..' : n.label;
+    ctx.fillText(label, n.x, n.y + r + 14);
+  }
+}
+
+function tick() {
+  if (simNodes.length === 0) {
+    if (nodes.length > 0) initSim();
+    else { requestAnimationFrame(tick); return; }
+  }
+  for (let i = 0; i < 3; i++) simulate();
+  draw();
+  requestAnimationFrame(tick);
+}
+
+// Listen for data from Android
+if (typeof Android !== 'undefined') {
+  // Will be called from Kotlin via evaluateJavascript
+}
+
+tick();
+</script>
+</body>
+</html>
