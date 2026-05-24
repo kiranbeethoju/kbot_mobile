@@ -17,6 +17,9 @@ interface PhoneContextDao {
     @Query("SELECT COUNT(*) FROM contact_context")
     suspend fun contactCount(): Int
 
+    @Query("SELECT * FROM contact_context ORDER BY display_name ASC")
+    suspend fun allContacts(): List<ContactContextEntity>
+
     @Query("SELECT COUNT(*) FROM message_context")
     suspend fun messageCount(): Int
 }

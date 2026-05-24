@@ -16,6 +16,7 @@ import com.offlinebot.ai.llm.ModelMetrics
 import com.offlinebot.data.database.dao.ChatMessageDao
 import com.offlinebot.data.database.dao.EmbeddingDao
 import com.offlinebot.data.database.dao.RecordingDao
+import com.offlinebot.data.database.dao.PhoneContextDao
 import com.offlinebot.data.database.dao.SystemPromptDao
 import com.offlinebot.data.database.dao.TranscriptDao
 import com.offlinebot.data.database.entities.ChatMessageEntity
@@ -94,6 +95,7 @@ class ChatViewModel @Inject constructor(
     val recordingDao: RecordingDao,
     private val chatMessageDao: ChatMessageDao,
     private val systemPromptDao: SystemPromptDao,
+    private val phoneContextDao: PhoneContextDao,
     private val modelPaths: ModelPaths,
     private val llmEngine: LocalLlmEngine,
     private val toolExecutor: ToolExecutor
@@ -357,7 +359,7 @@ class ChatViewModel @Inject constructor(
     }
 
     /** Search contacts for names mentioned in the query — extracts name after trigger words like "call"/"text" */
-    private fun searchContactsForQuery(query: String): String {
+    private suspend fun searchContactsForQuery(query: String): String {
         val queryLower = query.lowercase()
         val contactTriggers = listOf("call", "text", "message", "contact", "dial", "phone", "sms", "ring")
         val isContactQuery = contactTriggers.any { queryLower.contains(it) }
@@ -365,18 +367,19 @@ class ChatViewModel @Inject constructor(
         // Extract name candidates: words after a contact trigger (e.g. "call John Smith" → ["John", "Smith"])
         val words = query.split("\\s+".toRegex()).filter { it.length > 1 }
         val nameCandidates = mutableListOf<String>()
+        val stopWords = setOf("about", "for", "to", "the", "a", "at", "on", "in", "and", "or", "with", "from", "please", "now", "later", "today", "tomorrow")
 
         for (i in words.indices) {
             if (contactTriggers.any { words[i].equals(it, ignoreCase = true) }) {
                 for (j in (i + 1) until words.size) {
                     val word = words[j]
-                    if (word.lowercase() in listOf("about", "for", "to", "the", "a", "at", "on", "in", "and", "or", "with", "from", "please", "now", "later", "today", "tomorrow")) break
+                    if (word.lowercase() in stopWords) break
                     nameCandidates.add(word.replace(Regex("[^a-zA-Z]"), ""))
                 }
             }
         }
 
-        // Fallback: proper-looking capitalized words not in common-word list
+        // Fallback: proper-looking capitalized words
         val commonWords = setOf("I", "I'm", "I'll", "I've", "The", "A", "This", "That", "What", "Who", "How", "When", "Where", "Why", "Can", "Could", "Would", "Will", "Is", "Are", "Was", "Were", "Do", "Does", "Did", "Show", "Tell", "Find", "Get", "Search", "Look", "Open", "Please", "Hey", "Hi", "Hello", "OK", "Okay", "Yes", "No", "Maybe", "Need", "Want", "Going", "Just", "Like", "Know", "Think", "Really", "Still")
         if (nameCandidates.isEmpty()) {
             words.filter { word ->
@@ -384,21 +387,35 @@ class ChatViewModel @Inject constructor(
             }.forEach { nameCandidates.add(it) }
         }
 
-        // If it's a contact query but no name found, try extracting any capitalized word
+        // If it's a contact query but no name found, use any non-common word
         if (isContactQuery && nameCandidates.isEmpty()) {
-            words.filter { it.length > 2 && it !in commonWords }.take(2).forEach { nameCandidates.add(it) }
+            words.filter { it.length > 2 && it !in commonWords && it !in contactTriggers && it !in stopWords }
+                .take(2).forEach { nameCandidates.add(it) }
         }
 
         if (!isContactQuery && nameCandidates.isEmpty()) return ""
+
+        // Check runtime permission before querying system contacts
+        val hasPermission = context.checkSelfPermission(android.Manifest.permission.READ_CONTACTS) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+
+        if (!hasPermission) {
+            Log.w("ChatViewModel", "READ_CONTACTS not granted — trying local DB contacts instead")
+            // Fall back to locally-imported contacts from Room DB
+            val localMsg = searchLocalContacts(nameCandidates, isContactQuery)
+            if (localMsg.isNotEmpty()) return localMsg
+            return "--- Contact Search ---\nREAD_CONTACTS permission needed to search phone contacts. Grant it in Settings > Apps > KBot > Permissions, or use 'Import contacts' in the Settings tab.\n"
+        }
 
         val contacts = mutableListOf<Pair<String, String>>()
         try {
             context.contentResolver.query(
                 ContactsContract.Contacts.CONTENT_URI,
-                null, null, null, "display_name ASC LIMIT 50"
+                arrayOf(ContactsContract.Contacts._ID, ContactsContract.Contacts.DISPLAY_NAME, ContactsContract.Contacts.HAS_PHONE_NUMBER),
+                null, null, "display_name ASC LIMIT 50"
             )?.use { cursor ->
-                val nameIdx = cursor.getColumnIndex(ContactsContract.Contacts.DISPLAY_NAME)
                 val idIdx = cursor.getColumnIndex(ContactsContract.Contacts._ID)
+                val nameIdx = cursor.getColumnIndex(ContactsContract.Contacts.DISPLAY_NAME)
                 val hasPhoneIdx = cursor.getColumnIndex(ContactsContract.Contacts.HAS_PHONE_NUMBER)
                 while (cursor.moveToNext()) {
                     val name = cursor.getString(nameIdx) ?: continue
@@ -406,12 +423,11 @@ class ChatViewModel @Inject constructor(
                         val contactId = cursor.getString(idIdx)
                         context.contentResolver.query(
                             ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
-                            null,
+                            arrayOf(ContactsContract.CommonDataKinds.Phone.NUMBER),
                             "${ContactsContract.CommonDataKinds.Phone.CONTACT_ID} = ?",
                             arrayOf(contactId), null
                         )?.use { phoneCursor ->
-                            val numIdx = phoneCursor.getColumnIndex(
-                                ContactsContract.CommonDataKinds.Phone.NUMBER)
+                            val numIdx = phoneCursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)
                             while (phoneCursor.moveToNext()) {
                                 contacts.add(name to phoneCursor.getString(numIdx))
                             }
@@ -419,13 +435,21 @@ class ChatViewModel @Inject constructor(
                     }
                 }
             }
-        } catch (_: Exception) {
+            Log.i("ChatViewModel", "Contact search: query=\"$query\", candidates=${nameCandidates}, found=${contacts.size} contacts")
+        } catch (e: SecurityException) {
+            Log.w("ChatViewModel", "Contact search: READ_CONTACTS denied at runtime")
+            return ""
+        } catch (e: Exception) {
+            Log.w("ChatViewModel", "Contact search failed: ${e.message}", e)
             return ""
         }
 
-        if (contacts.isEmpty()) return ""
+        if (contacts.isEmpty()) {
+            Log.i("ChatViewModel", "Contact search: no contacts on device")
+            return ""
+        }
 
-        // Filter by name candidates — match whole name parts, not substrings
+        // Filter by name candidates — match whole name parts
         val filtered = if (nameCandidates.isNotEmpty()) {
             contacts.filter { (name, _) ->
                 val nameParts = name.split(" ").map { it.lowercase() }
@@ -434,24 +458,61 @@ class ChatViewModel @Inject constructor(
                 }
             }
         } else if (isContactQuery) {
-            emptyList() // Don't dump all contacts — let the LLM use get_contacts tool instead
+            emptyList()
         } else {
             emptyList()
         }
 
         if (filtered.isEmpty()) {
+            Log.i("ChatViewModel", "Contact search: no match for '${nameCandidates.joinToString(" ")}' among ${contacts.size} contacts")
             if (isContactQuery) {
                 return "--- Contact Search ---\nNo contact matched \"${nameCandidates.joinToString(" ")}\". Use get_contacts tool to browse all contacts.\n"
             }
             return ""
         }
 
+        Log.i("ChatViewModel", "Contact search: returning ${filtered.size} matches for '${nameCandidates.joinToString(" ")}'")
         return buildString {
             append("--- Matching Contacts ---\n")
             filtered.take(10).forEach { (name, number) ->
                 append("$name: $number\n")
             }
             append("Use call_contact or send_message tool with the exact name and number above.\n")
+        }
+    }
+
+    /** Search locally-imported contacts from Room DB (fallback when READ_CONTACTS not granted) */
+    private suspend fun searchLocalContacts(nameCandidates: List<String>, isContactQuery: Boolean): String {
+        try {
+            val allLocal = phoneContextDao.allContacts()
+            if (allLocal.isEmpty()) return ""
+
+            val filtered = if (nameCandidates.isNotEmpty()) {
+                allLocal.filter { contact ->
+                    val nameParts = contact.displayName.split(" ").map { it.lowercase() }
+                    nameCandidates.any { cand ->
+                        nameParts.any { part -> part == cand.lowercase() || part.startsWith(cand.lowercase()) }
+                    }
+                }
+            } else if (isContactQuery) {
+                allLocal
+            } else {
+                emptyList()
+            }
+
+            if (filtered.isEmpty()) return ""
+
+            Log.i("ChatViewModel", "Local contacts: returning ${filtered.size} matches")
+            return buildString {
+                append("--- Matching Contacts (locally stored) ---\n")
+                filtered.take(10).forEach { contact ->
+                    append("${contact.displayName} (use get_contacts tool for phone number)\n")
+                }
+                append("Use call_contact or send_message tool with the exact name. The tool will look up the number.\n")
+            }
+        } catch (e: Exception) {
+            Log.w("ChatViewModel", "Local contact search failed: ${e.message}")
+            return ""
         }
     }
 
