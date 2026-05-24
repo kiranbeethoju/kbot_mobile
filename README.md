@@ -1,245 +1,227 @@
-# OfflineBot
+<p align="center">
+  <img src="app/src/main/res/mipmap-hdpi/ic_launcher.png" width="96" height="96" alt="KBot Logo" />
+</p>
 
-OfflineBot is an Android-first, private offline second brain. The MVP goal is intentionally narrow:
+<h1 align="center">KBot Mobile</h1>
 
-1. Record voice with one tap.
-2. Save audio locally.
-3. Transcribe offline with `whisper.cpp`.
-4. Search old thoughts with local embeddings.
-5. Add summaries and weekly intelligence after capture and retrieval are stable.
+<p align="center">
+  <strong>Offline-first AI companion for Android. 100% on-device LLM, voice transcription, semantic search, and automation — no cloud required.</strong>
+</p>
 
-The app should not request internet permission in the initial MVP. Model files are user-managed and should be placed on-device only when the feature needs them.
+<p align="center">
+  <a href="https://github.com/kiranbeethoju/kbot_mobile/raw/refs/heads/main/app/build/outputs/apk/release/app-release.apk">
+    <img src="https://img.shields.io/badge/Download-APK-brightgreen?style=for-the-badge&logo=android" alt="Download APK" />
+  </a>
+  <a href="#-quick-start">
+    <img src="https://img.shields.io/badge/Quick-Start-blue?style=for-the-badge" alt="Quick Start" />
+  </a>
+  <a href="#-contributing">
+    <img src="https://img.shields.io/badge/PRs-Welcome-ff69b4?style=for-the-badge" alt="PRs Welcome" />
+  </a>
+</p>
 
-## MVP Model Policy
+<p align="center">
+  <img src="https://img.shields.io/badge/minSdk-29-green" alt="minSdk 29" />
+  <img src="https://img.shields.io/badge/targetSdk-35-blue" alt="targetSdk 35" />
+  <img src="https://img.shields.io/badge/Kotlin-2.1-7f52ff?logo=kotlin" alt="Kotlin 2.1" />
+  <img src="https://img.shields.io/badge/Compose-BOM_2025.01-4285F4?logo=jetpackcompose" alt="Compose" />
+  <img src="https://img.shields.io/badge/license-MIT-green" alt="License MIT" />
+  <img src="https://img.shields.io/badge/maintainer-kiranbeethoju%40gmail.com-blue" alt="Maintainer" />
+</p>
 
-Do not download giant models first. Start with:
+---
 
-| Purpose | Model | Runtime |
-| --- | --- | --- |
-| Speech-to-text | `ggml-base.en.bin` | `whisper.cpp` JNI |
-| Search | MiniLM ONNX | ONNX Runtime Android |
+## What is KBot?
 
-Skip local LLM summaries until recording, transcription, and search are smooth on a real phone.
+KBot turns your phone into a **private second brain**. Record voice notes, search your memories semantically, chat with a local LLM, and schedule automated intelligence — all without sending your data to a server.
 
-Later options:
-
-| Purpose | Model |
-| --- | --- |
-| Lightweight tagging | Gemma 3 1B quantized |
-| Advanced summaries | Phi-3 Mini Q4 GGUF |
-| Better embeddings | bge-small-en |
-
-## Local Model Layout
-
-Use app-private external storage for the Android MVP:
-
-```text
-Android/data/com.offlinebot/files/models/
-├── whisper/
-│   └── ggml-base.en.bin
-├── embeddings/
-│   └── minilm/
-│       └── model.onnx
-└── llm/
-    └── gemma-4-E2B-it-Q3_K_M.gguf
+```
+Record → Transcribe (whisper.cpp) → Embed (MiniLM ONNX) → Store (Room DB)
+                                                          → Search (cosine similarity)
+                                                          → Summarize (llama.cpp + Gemma)
+                                                          → Automate (WorkManager rules engine)
 ```
 
-The processing pipeline must load one model at a time:
+## Features
 
-```text
-Record audio
-Load Whisper
-Transcribe
-Unload Whisper
-Load embeddings
-Generate vector
-Unload embeddings
-Defer LLM summaries
+| Category | Capability | Engine |
+|----------|-----------|--------|
+| **Voice** | One-tap recording, offline transcription | `whisper.cpp` via JNI |
+| **Chat** | On-device LLM with tool use | `llama.cpp` running Gemma 4 E2B Q3_K_M |
+| **Search** | Semantic search across all memories | MiniLM ONNX + cosine similarity |
+| **Context** | Contacts + SMS imported locally | Room DB, zero network |
+| **Automation** | Scheduled summaries, memory resurfacing, keyword tagging, habit reflection | WorkManager + custom rules engine |
+| **Cloud Fallback** | Optional NVIDIA NIM API streaming | Nemotron Nano Omni 30B |
+| **Tools** | Notifications, alarms, calls, SMS — from LLM | Intent-based, offline-safe |
+| **Privacy** | No internet permission required for core features | All models run locally |
+
+## Download
+
+**[Download Latest Release APK](https://github.com/kiranbeethoju/kbot_mobile/raw/refs/heads/main/app/build/outputs/apk/release/app-release.apk)**
+
+> The APK is ~976 MB (includes native `.so` libraries for llama.cpp + whisper.cpp compiled for arm64-v8a and armeabi-v7a). Models are NOT bundled — install them separately with the script below.
+
+## Quick Start
+
+### Prerequisites
+
+- **JDK 17** (JDK 25+ is not supported by Gradle 8.7)
+- **Android SDK 35** with Build Tools
+- **Android Studio Ladybug** or newer (optional)
+- A sibling checkout of [llama.cpp](https://github.com/ggml-org/llama.cpp) at `../llama.cpp`
+
+### Build
+
+```bash
+# Clone with llama.cpp dependency
+git clone https://github.com/kiranbeethoju/kbot_mobile.git
+cd kbot_mobile
+git clone https://github.com/ggml-org/llama.cpp ../llama.cpp
+
+# Set JDK 17 and build
+export JAVA_HOME=/opt/homebrew/Cellar/openjdk@17/17.0.19/libexec/openjdk.jdk/Contents/Home
+./gradlew assembleDebug
 ```
 
-## Project Shape
+### Install
 
-```text
+```bash
+# Install the APK
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+
+# Push AI models to device
+chmod +x scripts/install-models-to-device.sh
+./scripts/install-models-to-device.sh
+```
+
+### Models Required
+
+| Model | Path on Device | Purpose |
+|-------|---------------|---------|
+| `ggml-base.en.bin` | `files/models/whisper/` | Speech-to-text |
+| `model.onnx` + `vocab.txt` + `tokenizer.json` | `files/models/embeddings/minilm/` | Semantic search |
+| `gemma-4-E2B-it-Q3_K_M.gguf` | `files/models/llm/` | Local LLM chat (optional) |
+
+## Architecture
+
+```
 app/src/main/java/com/offlinebot/
 ├── ai/
-├── data/
+│   ├── llm/LlamaCppEngine.kt        # llama.cpp JNI bridge — load/warmup/chat/unload lifecycle
+│   ├── whisper/WhisperCppEngine.kt  # whisper.cpp JNI — WAV → transcript
+│   ├── embeddings/                   # MiniLM ONNX — text → 384-dim vector
+│   ├── automation/                   # RuleSchedulerWorker, DailySummaryWorker, ResurfaceWorker
+│   ├── cloud/                        # NvidiaApiClient (SSE streaming), ToolExecutor (6 tools)
+│   └── download/                     # Model download manager
+├── data/database/
+│   ├── OfflineBotDatabase.kt         # Room DB v7 — 11 entities
+│   └── dao/                          # RecordingDao, EmbeddingDao, AutomationDao, etc.
 ├── recorder/
-├── security/
+│   ├── service/RecordingService.kt   # Foreground audio recording
+│   └── storage/AudioStorage.kt       # WAV files in app-private storage
 ├── ui/
+│   ├── home/                         # Main recording + search screen
+│   ├── chat/                         # LLM chat with streaming + tool approval
+│   ├── automation/                   # Rules editor with time picker + scheduler heartbeat
+│   ├── timeline/                     # Chronological memory browser
+│   ├── buckets/                      # Weekly bucket organizer
+│   ├── search/                       # Full-text + semantic search
+│   ├── models/                       # Model download + status
+│   ├── settings/                     # System prompt editor, contacts import
+│   └── status/                       # Battery, RAM, model metrics
 └── utils/
+    ├── PerformanceManager.kt         # Eco / Balanced / Performance modes
+    ├── ActivityLogger.kt             # Structured event logging
+    └── LocationHelper.kt             # GPS metadata for recordings
 ```
 
-## Current State
+### Key Design Decisions
 
-This repo now contains the initial Kotlin/Jetpack Compose Android skeleton:
+**One-model-at-a-time pipeline.** Phones have 4–6 GB RAM. The pipeline enforces sequential loading: load Whisper → transcribe → unload → load embeddings → embed → unload → defer LLM. Each engine is a `@Singleton` with explicit `load()`/`unload()` guarded by a `Mutex`.
 
-- Home, Timeline, Search, Weekly Buckets, and Settings screens.
-- Foreground recording service.
-- Local audio storage under app-private external files.
-- Room entities for recordings, transcripts, buckets, and embeddings.
-- Optional local Contacts/SMS context import from Settings.
-- WorkManager queue placeholder for deferred offline processing.
-- No internet permission in the Android manifest.
+**5-minute auto-unload.** The LLM frees itself after 5 minutes of inactivity (`LlamaCppEngine.kt:194-210`). A coroutine timer checks the last inference timestamp and calls `nativeFree()`.
 
-## Build
+**Batched JNI decoding.** `llama-jni.cpp` uses `common_batch_add` + `llama_decode` in batched loops. Thread count is capped at `max(2, min(4, n-2))` — leaving 2 cores free for the UI thread.
 
-### Requirements
+**Battery-aware automation.** `shouldSkip()` checks battery level before every scheduled job. If <20% and not charging, the worker returns `Result.success()` without running. The RuleSchedulerWorker polls every 5 minutes (configurable 1m–1h) for pending time-based rules.
 
-- Android Studio Ladybug or newer.
-- JDK 17.
-- Android SDK platform 35.
-- Android SDK Build Tools.
-- Gradle 8.7+ if building from the command line without Android Studio.
+**Hybrid search without a vector DB.** Query → ONNX embedding → cosine similarity against all stored vectors → keyword SQL fallback → full-text scan. Deduplication via `LinkedHashSet<Long>`.
 
-This project uses `com.microsoft.onnxruntime:onnxruntime-android:1.18.0` so MiniLM `model.onnx` loads correctly. The smaller `onnxruntime-mobile` package only supports ORT-format (`.ort`) models and will fail with `ONNX format model is not supported in this build`.
+**Tool execution with JSON extraction.** The LLM outputs JSON tool calls. The parser strips markdown fences, walks backward from the tool name to find `{`, then counts brace depth for the matching `}`. More robust than regex on nested JSON.
 
-This project uses Dagger/Hilt `2.57.1` so annotation processing can read Kotlin 2.1 metadata while remaining compatible with the AGP 8 build line.
+**Cloud as optional upgrade.** Streaming via raw `HttpURLConnection` reading SSE `data:` lines. Each content delta emitted to a Kotlin `Flow<String>` with a 30ms inter-token delay for visible typing effect.
 
-### Build Debug APK From Android Studio
+## Contributing
 
-1. Open this folder in Android Studio.
-2. Let Gradle sync finish.
-3. Select `app` as the run configuration.
-4. Use `Build > Build Bundle(s) / APK(s) > Build APK(s)`.
+We welcome contributions! Please follow these guidelines:
 
-The debug APK is created at:
+### Code of Conduct
 
-```text
-app/build/outputs/apk/debug/app-debug.apk
-```
+- Be respectful and constructive in code reviews and discussions
+- Assume good intent — this is a passion project built in the open
+- Help us keep the codebase clean: no commented-out code, no stale TODOs without linked issues
 
-### Build Debug APK From Terminal
+### How to Contribute
 
-Use JDK 17. If your shell defaults to a newer Java version, set `JAVA_HOME` first:
+1. **Fork** the repository
+2. **Create a branch** from `main`: `git checkout -b feat/your-feature-name`
+3. **Make your changes** — follow the existing code style (no wildcard imports, single-expression functions where readable, no unnecessary comments)
+4. **Test your changes** — build both debug and release APKs, test on a real device or emulator
+5. **Commit** with a clear message: `feat: add X` / `fix: resolve Y` / `refactor: simplify Z`
+6. **Push** and open a Pull Request against `main`
+
+### Pull Request Guidelines
+
+- **Keep PRs focused.** One feature or fix per PR. If your change touches more than 5 files, explain why in the description.
+- **No breakage.** PRs must compile (`./gradlew assembleDebug` passes) and not regress existing functionality.
+- **Describe what and why.** The diff shows *what* changed — your description should explain *why* this is the right approach.
+- **Screenshots for UI changes.** Attach before/after screenshots.
+- **Tests are welcome but not mandatory.** When in doubt, test on a real device.
+
+### Issue Guidelines
+
+- **Search existing issues first.** Someone may have already reported or fixed it.
+- **Use clear titles.** "Automation scheduler doesn't fire on Samsung S23" > "It's broken".
+- **Include:** device model, Android version, steps to reproduce, expected vs actual behavior.
+- **Feature requests:** explain the use case and why the current workaround doesn't cut it.
+
+### Development Setup
 
 ```bash
-export JAVA_HOME=$(/usr/libexec/java_home -v 17)
-```
-
-Make sure Android SDK platform 35 and build-tools are installed. If needed:
-
-```bash
-sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools"
-```
-
-Then build with the Gradle wrapper:
-
-```bash
+git clone https://github.com/kiranbeethoju/kbot_mobile.git
+cd kbot_mobile
+git clone https://github.com/ggml-org/llama.cpp ../llama.cpp
+git clone https://github.com/ggml-org/whisper.cpp ../whisper.cpp
+export JAVA_HOME=/opt/homebrew/Cellar/openjdk@17/17.0.19/libexec/openjdk.jdk/Contents/Home
 ./gradlew assembleDebug
 ```
 
-Install the APK on a connected device:
+### Project Structure Conventions
 
-```bash
-adb install -r app/build/outputs/apk/debug/app-debug.apk
-```
+- New screens go in `app/src/main/java/com/offlinebot/ui/<screen>/` with a `Screen.kt` + `ViewModel.kt` pair
+- Database entities go in `app/src/main/java/com/offlinebot/data/database/entities/`
+- DAOs go in `app/src/main/java/com/offlinebot/data/database/dao/`
+- AI engines go in `app/src/main/java/com/offlinebot/ai/<engine>/`
+- Native C++ code goes in `app/src/main/cpp/`
+- Scripts go in `scripts/`
 
-This repo was verified with:
+### First-Time Contributors
 
-```bash
-JAVA_HOME=/opt/homebrew/Cellar/openjdk@17/17.0.19/libexec/openjdk.jdk/Contents/Home \
-ANDROID_HOME=/private/tmp/android-sdk \
-./gradlew assembleDebug
-```
+Look for issues labeled `good first issue` in the issue tracker. These are small, self-contained tasks to get familiar with the codebase. When in doubt, open a **Draft PR** early — we'll help you shape it.
 
-### Build Release APK
+## Contact
 
-Create a local keystore first:
+**Maintainer:** Kiran Beethoju — [kiranbeethoju@gmail.com](mailto:kiranbeethoju@gmail.com)
 
-```bash
-keytool -genkeypair \
-  -v \
-  -keystore offlinebot-release.jks \
-  -alias offlinebot \
-  -keyalg RSA \
-  -keysize 2048 \
-  -validity 10000
-```
+- **Bug reports & feature requests:** [GitHub Issues](https://github.com/kiranbeethoju/kbot_mobile/issues)
+- **Discussions:** [GitHub Discussions](https://github.com/kiranbeethoju/kbot_mobile/discussions)
 
-Add signing config before distributing a release build. Until then, use debug APKs only for local testing.
+## License
 
-### Important Model Note
+MIT License — see [LICENSE](LICENSE) for details. This project bundles llama.cpp and whisper.cpp (also MIT licensed).
 
-The APK does not include Whisper or MiniLM model files. Install the APK first, then push the models with the script below. This keeps the APK small and avoids shipping large binaries by accident.
+---
 
-## Install Downloaded Models On A Device
-
-The MVP models are downloaded to the workspace under `models/`, but they are not committed and not packaged into the APK.
-
-Downloaded files currently present locally:
-
-| File | SHA-256 |
-| --- | --- |
-| `models/whisper/ggml-base.en.bin` | `a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002` |
-| `models/embeddings/minilm/model.onnx` | `6fd5d72fe4589f189f8ebc006442dbb529bb7ce38f8082112682524616046452` |
-| `models/embeddings/minilm/vocab.txt` | `07eced375cec144d27c900241f3e339478dec958f92fddbc551f295c992038a3` |
-| `models/embeddings/minilm/tokenizer.json` | `be50c3628f2bf5bb5e3a7f17b1f74611b2561a3a27eeab05e5aa30f411572037` |
-
-With a device connected through ADB:
-
-```bash
-chmod +x scripts/install-models-to-device.sh
-scripts/install-models-to-device.sh
-```
-
-The app expects:
-
-```text
-/sdcard/Android/data/com.offlinebot/files/models/
-├── whisper/ggml-base.en.bin
-├── embeddings/minilm/
-│   ├── model.onnx
-│   ├── vocab.txt
-│   └── tokenizer.json
-└── llm/gemma-4-E2B-it-Q3_K_M.gguf
-```
-
-Place the Gemma GGUF at `models/llm/gemma-4-E2B-it-Q3_K_M.gguf` locally before running `scripts/install-models-to-device.sh` (the script pushes it when the file exists).
-
-## On-device chat (Gemma 4)
-
-Chat uses the bundled `offlinebot-llama` JNI library (llama.cpp + Jinja chat templates from `llama.cpp/common`). The model must be on device at:
-
-```text
-Android/data/com.offlinebot/files/models/llm/gemma-4-E2B-it-Q3_K_M.gguf
-```
-
-**Fix (May 2026):** Gemma loads on app start with a warmup decode (green dot = ready). Chat is blocked until the dot is green. Messages persist in Room. Timeline resolves audio paths under `files/audio/`, plays WAV, and saves transcripts. JNI decode uses `common_batch_add` + `llama_tokenize` (llama.android pattern).
-
-Requirements:
-
-- Sibling checkout of [llama.cpp](https://github.com/ggml-org/llama.cpp) at `../llama.cpp` relative to this repo (see `app/src/main/cpp/CMakeLists.txt`).
-- On first launch wait ~1 min for the **green dot** before chatting. Old timeline recordings may show “file missing” if the WAV was deleted — record again.
-
-Logcat filter for LLM issues:
-
-```bash
-adb logcat | grep -i "offlinebot-llama\|LlamaCppEngine"
-```
-
-## Phone Context Import
-
-Contacts and SMS are optional local context sources. The app does not ask for these permissions on launch. Open Settings and tap `Import contacts and SMS locally` if you want the app to copy a bounded local context set into Room.
-
-Notes:
-
-- `READ_CONTACTS` and `READ_SMS` are sensitive Android permissions.
-- SMS access is heavily restricted for Play Store distribution. Keep this feature for local/private builds unless the product qualifies for Google's SMS policy.
-- Imported messages are truncated to 1000 characters each and stay local.
-
-## Recorder Troubleshooting
-
-If tapping the mic closes the app on a test build:
-
-1. Install the newest APK from `app/build/outputs/apk/debug/app-debug.apk`.
-2. Open Android app settings for OfflineBot and confirm `Microphone` is allowed.
-3. On Android 13+, allow notifications so the foreground recording notification can show.
-4. Reopen the app and tap the mic again.
-
-The recorder path now catches microphone startup failures and shows a local error instead of crashing the process.
-
-For live device logs:
-
-```bash
-adb logcat | grep -i "OfflineBot\|RecordingService\|AndroidRuntime"
-```
+<p align="center">
+  <strong>Built with ❤️ using Kotlin, Jetpack Compose, llama.cpp, whisper.cpp, and ONNX Runtime.</strong>
+</p>
