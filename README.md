@@ -211,7 +211,7 @@ Look for issues labeled `good first issue` in the issue tracker. These are small
 
 ## Contact
 
-**Maintainer:** Kiran Beethoju — [kiranbeethoju@gmail.com](mailto:kiranbeethoju@gmail.com)
+**Maintainer:** Kiran Beethoju — [kiranbeethoju@gmail.com](mailto:kiranbeethoju@gmail.com) · [LinkedIn](https://www.linkedin.com/in/kirankumarbeethoju/)
 
 - **Bug reports & feature requests:** [GitHub Issues](https://github.com/kiranbeethoju/kbot_mobile/issues)
 - **Discussions:** [GitHub Discussions](https://github.com/kiranbeethoju/kbot_mobile/discussions)
